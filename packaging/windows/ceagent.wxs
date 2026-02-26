@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <Product Id="*"
+           Name="CertKeeper Agent"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="CertKeeper"
+           UpgradeCode="{B8F6D54A-1C2E-4F3D-9A7B-E5C8D2F1A6B0}">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="CertKeeper Agent — automated SSL/TLS certificate deployment"
+             Comments="Installs ceagent as a Windows service" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of CertKeeper Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ── Properties (enrollment inputs) ───────────────────── -->
+
+    <Property Id="SERVER_URL" Secure="yes" />
+    <Property Id="ENROLLMENT_TOKEN" Secure="yes" />
+    <!-- Set to 1 when enrollment has already been done (upgrade scenario) -->
+    <Property Id="ALREADY_ENROLLED" Secure="yes">
+      <DirectorySearch Id="CheckEnrollment" Path="[CommonAppDataFolder]ceagent">
+        <FileSearch Name="client.crt" />
+      </DirectorySearch>
+    </Property>
+
+    <!-- ── UI ───────────────────────────────────────────────── -->
+
+    <UIRef Id="WixUI_Common" />
+    <UI>
+      <!-- Enrollment dialog — shown only on fresh install -->
+      <Dialog Id="EnrollmentDlg" Width="370" Height="270" Title="CertKeeper Agent — Enrollment">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Enrollment Settings" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Enter your CertKeeper server details to enroll this agent." />
+
+        <Control Id="ServerLabel" Type="Text" X="25" Y="60" Width="320" Height="15" NoPrefix="yes" Text="CertKeeper Server URL (e.g. https://certkeeper.example.com:3000):" />
+        <Control Id="ServerEdit" Type="Edit" X="25" Y="76" Width="320" Height="18" Property="SERVER_URL" />
+
+        <Control Id="TokenLabel" Type="Text" X="25" Y="106" Width="320" Height="15" NoPrefix="yes" Text="Enrollment Token (starts with cke_):" />
+        <Control Id="TokenEdit" Type="Edit" X="25" Y="122" Width="320" Height="18" Property="ENROLLMENT_TOKEN" />
+
+        <Control Id="Note" Type="Text" X="25" Y="155" Width="320" Height="30" NoPrefix="yes" Text="The enrollment token is single-use and expires after 1 hour. You can find it in the CertKeeper web UI after creating an agent." />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Condition Action="disable"><![CDATA[SERVER_URL = "" OR ENROLLMENT_TOKEN = ""]]></Condition>
+          <Condition Action="enable"><![CDATA[SERVER_URL <> "" AND ENROLLMENT_TOKEN <> ""]]></Condition>
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+
+      <!-- Install sequence: Welcome → License → Enrollment → Ready → Install -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg">1</Publish>
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="EnrollmentDlg"><![CDATA[NOT ALREADY_ENROLLED]]></Publish>
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg"><![CDATA[ALREADY_ENROLLED]]></Publish>
+
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="EnrollmentDlg"><![CDATA[NOT ALREADY_ENROLLED]]></Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="LicenseAgreementDlg"><![CDATA[ALREADY_ENROLLED]]></Publish>
+    </UI>
+
+    <WixVariable Id="WixUILicenseRtf" Value="packaging\windows\license.rtf" />
+
+    <!-- ── Directory structure ──────────────────────────────── -->
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+
+      <!-- C:\Program Files\ceagent\ -->
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="ceagent" />
+      </Directory>
+
+      <!-- C:\ProgramData\ceagent\ -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="DATADIR" Name="ceagent">
+          <Directory Id="DEPLOYMENTSDIR" Name="deployments" />
+        </Directory>
+      </Directory>
+
+    </Directory>
+
+    <!-- ── Components ───────────────────────────────────────── -->
+
+    <!-- Main executable + service + PATH -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="{A7E3C5D1-4B2F-4E8A-9C6D-F3A1B7E2D5C8}" Win64="yes">
+        <File Id="CeagentExe" Source="ceagent.exe" KeyPath="yes" />
+
+        <!-- Register as a Windows service (manual until enrollment succeeds) -->
+        <ServiceInstall Id="CeagentService"
+                        Type="ownProcess"
+                        Name="ceagent"
+                        DisplayName="CertKeeper Agent"
+                        Description="Pulls SSL/TLS certificates from CertKeeper and deploys them locally."
+                        Start="demand"
+                        Account="LocalSystem"
+                        ErrorControl="normal"
+                        Arguments="run" />
+
+        <ServiceControl Id="CeagentServiceControl"
+                        Name="ceagent"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+
+        <!-- Add install directory to system PATH -->
+        <Environment Id="PATH"
+                     Name="PATH"
+                     Value="[INSTALLFOLDER]"
+                     Permanent="no"
+                     Part="last"
+                     Action="set"
+                     System="yes" />
+      </Component>
+
+      <!-- Enrollment helper script -->
+      <Component Id="EnrollScript" Guid="{F1A2B3C4-D5E6-4F78-9A0B-C1D2E3F4A5B6}" Win64="yes">
+        <File Id="EnrollPs1" Source="packaging\windows\enroll.ps1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Data directory (C:\ProgramData\ceagent\) -->
+    <DirectoryRef Id="DATADIR">
+      <Component Id="DataDirectory" Guid="{C2D4E6F8-1A3B-4C5D-8E7F-A9B1C3D5E7F9}" Win64="yes">
+        <CreateFolder />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Deployments subdirectory -->
+    <DirectoryRef Id="DEPLOYMENTSDIR">
+      <Component Id="DeploymentsDirectory" Guid="{D3E5F7A9-2B4C-4D6E-9F8A-B1C3D5E7F9A2}" Win64="yes">
+        <CreateFolder />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ── Custom actions (enrollment) ──────────────────────── -->
+
+    <!-- Interactive enrollment (GUI install) -->
+    <CustomAction Id="SetEnrollArgsInteractive"
+                  Property="RunEnrollment"
+                  Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]enroll.ps1&quot; -CeagentPath &quot;[INSTALLFOLDER]ceagent.exe&quot; -ServerUrl &quot;[SERVER_URL]&quot; -Token &quot;[ENROLLMENT_TOKEN]&quot;" />
+
+    <!-- Silent enrollment (msiexec /quiet) -->
+    <CustomAction Id="SetEnrollArgsSilent"
+                  Property="RunEnrollment"
+                  Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]enroll.ps1&quot; -CeagentPath &quot;[INSTALLFOLDER]ceagent.exe&quot; -ServerUrl &quot;[SERVER_URL]&quot; -Token &quot;[ENROLLMENT_TOKEN]&quot; -Quiet" />
+
+    <CustomAction Id="RunEnrollment"
+                  BinaryKey="WixCA"
+                  DllEntry="WixQuietExec64"
+                  Execute="commit"
+                  Return="ignore"
+                  Impersonate="no" />
+
+    <InstallExecuteSequence>
+      <!-- Use silent args when UILevel <= 3 (quiet/passive), interactive otherwise -->
+      <Custom Action="SetEnrollArgsSilent" After="InstallFiles"><![CDATA[NOT ALREADY_ENROLLED AND NOT Installed AND UILevel <= 3 AND SERVER_URL <> "" AND ENROLLMENT_TOKEN <> ""]]></Custom>
+      <Custom Action="SetEnrollArgsInteractive" After="InstallFiles"><![CDATA[NOT ALREADY_ENROLLED AND NOT Installed AND UILevel > 3]]></Custom>
+      <Custom Action="RunEnrollment" After="SetEnrollArgsInteractive"><![CDATA[NOT ALREADY_ENROLLED AND NOT Installed AND ((UILevel > 3) OR (UILevel <= 3 AND SERVER_URL <> "" AND ENROLLMENT_TOKEN <> ""))]]></Custom>
+    </InstallExecuteSequence>
+
+    <!-- ── Feature ──────────────────────────────────────────── -->
+
+    <Feature Id="Complete" Title="CertKeeper Agent" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="EnrollScript" />
+      <ComponentRef Id="DataDirectory" />
+      <ComponentRef Id="DeploymentsDirectory" />
+    </Feature>
+
+  </Product>
+</Wix>

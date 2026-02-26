@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Linux: tarball, .deb, .rpm ─────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install nFPM
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Parse version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set ldflags
+        id: ldflags
+        run: |
+          LDFLAGS="-s -w"
+          LDFLAGS="$LDFLAGS -X main.version=${{ steps.version.outputs.version }}"
+          LDFLAGS="$LDFLAGS -X main.commit=$(git rev-parse --short HEAD)"
+          LDFLAGS="$LDFLAGS -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "flags=$LDFLAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -ldflags '${{ steps.ldflags.outputs.flags }}' -o ceagent ./cmd/ceagent/
+
+      - name: Package tarball
+        run: |
+          cp packaging/linux/enroll.sh ceagent-enroll
+          cp packaging/linux/ceagent.service ceagent.service
+          tar czf ceagent_${{ steps.version.outputs.version }}_linux_${{ matrix.goarch }}.tar.gz ceagent ceagent-enroll ceagent.service
+
+      - name: Package deb
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GOARCH: ${{ matrix.goarch }}
+        run: nfpm package --config packaging/linux/nfpm.yaml --packager deb --target ceagent_${{ steps.version.outputs.version }}_linux_${{ matrix.goarch }}.deb
+
+      - name: Package rpm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GOARCH: ${{ matrix.goarch }}
+        run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target ceagent_${{ steps.version.outputs.version }}_linux_${{ matrix.goarch }}.rpm
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.goarch }}
+          path: ceagent_${{ steps.version.outputs.version }}_linux_${{ matrix.goarch }}.*
+
+  # ── Windows: MSI installer ────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Parse version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set ldflags
+        id: ldflags
+        shell: bash
+        run: |
+          LDFLAGS="-s -w"
+          LDFLAGS="$LDFLAGS -X main.version=${{ steps.version.outputs.version }}"
+          LDFLAGS="$LDFLAGS -X main.commit=$(git rev-parse --short HEAD)"
+          LDFLAGS="$LDFLAGS -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "flags=$LDFLAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        shell: bash
+        run: go build -ldflags '${{ steps.ldflags.outputs.flags }}' -o ceagent.exe ./cmd/ceagent/
+
+      - name: Build MSI
+        shell: cmd
+        run: |
+          "%WIX%bin\candle.exe" -dVersion=${{ steps.version.outputs.version }} -arch x64 -ext WixUIExtension -ext WixUtilExtension -o ceagent.wixobj packaging\windows\ceagent.wxs
+          "%WIX%bin\light.exe" -ext WixUIExtension -ext WixUtilExtension -o ceagent_${{ steps.version.outputs.version }}_windows_${{ matrix.goarch }}.msi ceagent.wixobj
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.goarch }}
+          path: ceagent_${{ steps.version.outputs.version }}_windows_${{ matrix.goarch }}.msi
+
+  # ── Collect artifacts and publish release ──────────────────
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Parse version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksums
+        run: sha256sum ceagent_${{ steps.version.outputs.version }}_* > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.version.outputs.version }}"
+          generate_release_notes: true
+          files: |
+            ceagent_${{ steps.version.outputs.version }}_linux_amd64.tar.gz
+            ceagent_${{ steps.version.outputs.version }}_linux_arm64.tar.gz
+            ceagent_${{ steps.version.outputs.version }}_linux_amd64.deb
+            ceagent_${{ steps.version.outputs.version }}_linux_arm64.deb
+            ceagent_${{ steps.version.outputs.version }}_linux_amd64.rpm
+            ceagent_${{ steps.version.outputs.version }}_linux_arm64.rpm
+            ceagent_${{ steps.version.outputs.version }}_windows_amd64.msi
+            ceagent_${{ steps.version.outputs.version }}_windows_arm64.msi
+            checksums.txt

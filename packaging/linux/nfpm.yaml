@@ -1,0 +1,39 @@
+name: ceagent
+arch: "${GOARCH}"
+platform: linux
+version: "${VERSION}"
+maintainer: Clayton Fuselier
+description: CertKeeper Agent — automated SSL/TLS certificate deployment daemon
+vendor: CertKeeper
+homepage: https://github.com/claytonfuselier/certkeeper-agent
+license: MIT
+
+contents:
+  - src: ./ceagent
+    dst: /usr/local/bin/ceagent
+    file_info:
+      mode: 0755
+
+  - src: ./packaging/linux/enroll.sh
+    dst: /usr/local/bin/ceagent-enroll
+    file_info:
+      mode: 0755
+
+  - src: ./packaging/linux/ceagent.service
+    dst: /etc/systemd/system/ceagent.service
+    file_info:
+      mode: 0644
+
+  - dst: /etc/ceagent
+    type: dir
+    file_info:
+      mode: 0755
+
+  - dst: /etc/ceagent/deployments
+    type: dir
+    file_info:
+      mode: 0755
+
+scripts:
+  postinstall: ./packaging/linux/postinstall.sh
+  preremove: ./packaging/linux/preremove.sh
