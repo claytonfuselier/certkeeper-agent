@@ -1,5 +1,9 @@
 # Uninstall Guide
 
+This guide covers removing the CertKeeper Agent from Windows and Linux systems. For installation, see the [Installation Guide](installation.md). For configuration reference, see [Configuration](configuration.md).
+
+---
+
 ## Standard Uninstall
 
 ### Windows (MSI)

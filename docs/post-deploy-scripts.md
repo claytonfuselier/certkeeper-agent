@@ -2,6 +2,8 @@
 
 After deploying a certificate, ceagent runs the configured `post_deploy` script for that deployment. This is how you integrate ceagent with your web server, mail server, or any other service that uses TLS certificates.
 
+For script path configuration details, see [Configuration — Deployment Config](configuration.md#deployment-config).
+
 ## How It Works
 
 1. ceagent downloads new certificate files to `/etc/ceagent/deployments/<id>/`

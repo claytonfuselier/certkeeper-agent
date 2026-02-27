@@ -1,20 +1,36 @@
 # CertKeeper Agent (`ceagent`)
 
-A lightweight daemon that automatically pulls SSL/TLS certificates from a [CertKeeper](https://github.com/claytonfuselier/certkeeper) server and deploys them to the local filesystem. Authenticates using **mTLS** (mutual TLS) — no shared secrets, no tokens after initial enrollment.
+A lightweight daemon that automatically pulls SSL/TLS certificates from a [CertKeeper](https://github.com/claytonfuselier/certkeeper) server and deploys them to the local filesystem.
+
+<br>
 
 ## Features
 
-- **mTLS authentication** — agent identity backed by x509 certificates signed by CertKeeper's internal CA
-- **Automatic certificate deployment** — polls the server and deploys new/renewed certificates with zero manual intervention
+- **Automatic certificate deployment** — polls CertKeeper and deploys new/renewed certificates automatically
 - **Post-deploy hooks** — run custom scripts after each deployment (e.g. reload nginx, restart services)
-- **Auto-renewing agent certificate** — the agent's own mTLS cert renews automatically before expiry
-- **Cross-platform** — Linux (.deb, .rpm, tarball), Windows (MSI installer)
+- **mTLS authentication** — agent identity backed by x509 certificates signed by CertKeeper's internal CA
+- **Cross-platform** — Linux (.deb, .rpm, tarball) and Windows (MSI installer)
 - **Single binary** — no runtime dependencies
 - **Interactive & silent install** — GUI/TUI enrollment prompts during install, or pass credentials for fully unattended deployment
 
+<br>
+
+## How It Works
+
+1. **Setup:** Create a new agent record on the CertKeeper server and record the one-time enrollment token.
+
+2. **Enrollment:** The agent generates a local RSA 2048 key pair, sends a CSR to the server with the one-time token, and receives a signed agent certificate valid for 45 days.
+
+2. **Heartbeat loop:** The agent sends periodic heartbeats (server-controlled interval). The heartbeat response includes a `deployments_hash`. If the hash differs from the locally stored value, the agent fetches the full deployment list.
+
+3. **Certificate deployment:** For each assigned deployment with a changed `content_hash`, the agent downloads the certificate bundle, validates the PEM content, and writes `fullchain.pem`, `cert.pem`, and `privkey.pem` to the deployment directory. The agent then runs the relevant post-deploy script if configured.
+
+
+<br>
+
 ## Installation
 
-Download the latest release from the [Releases](https://github.com/claytonfuselier/certkeeper-agent/releases) page.
+Download the latest [release](https://github.com/claytonfuselier/certkeeper-agent/releases).
 
 | Platform | Package | Install Command |
 |----------|---------|-----------------|
@@ -37,33 +53,31 @@ msiexec /i ceagent.msi SERVER_URL=https://certkeeper.example.com:3000 ENROLLMENT
 
 See the [Installation Guide](docs/installation.md) for full details including tarball installs and one-liners.
 
+<br>
+
 ## Quick Start
 
-### 1. Create the agent in CertKeeper
+1. In the CertKeeper web UI, create a new agent. Copy the one-time enrollment token (starts with `cke_`).
 
-In the CertKeeper web UI, create a new agent. Copy the one-time enrollment token (starts with `cke_`).
+2. Use one of the installers above — they handle enrollment interactively. Or enroll manually:
 
-### 2. Install & enroll
+   ```bash
+   ceagent enroll --server https://certkeeper.example.com:3000 --token cke_<token>
+   ```
 
-Use one of the installers above — they handle enrollment interactively. Or enroll manually:
+3. The installer starts the service automatically on successful enrollment. To start manually:
 
-```bash
-ceagent enroll --server https://certkeeper.example.com:3000 --token cke_<token>
-```
+   ```bash
+   # Linux
+   sudo systemctl enable --now ceagent
 
-### 3. Start the daemon
+   # Windows
+   Start-Service ceagent
+   ```
 
-The installer starts the service automatically on successful enrollment. To start manually:
+4. The agent heartbeats on the server-provided interval, automatically pulls assigned certificates, and deploys them to disk.
 
-```bash
-# Linux
-sudo systemctl enable --now ceagent
-
-# Windows
-Start-Service ceagent
-```
-
-The agent heartbeats on the server-provided interval, automatically pulls assigned certificates, and deploys them to disk.
+<br>
 
 ## CLI Reference
 
@@ -77,6 +91,8 @@ ceagent deployments                                # List assigned deployments
 ceagent deploy --id <id>                           # Force re-download a deployment
 ceagent version                                    # Print version/build info
 ```
+
+<br>
 
 ## Configuration
 
@@ -122,71 +138,17 @@ After writing certificate files, the agent runs the configured `post_deploy` scr
 | `CEAGENT_KEY_PATH` | Path to `privkey.pem` |
 | `CEAGENT_DOMAINS` | Comma-separated domain list |
 
-## File Layout
-
-```
-/etc/ceagent/                   # (Linux default)
-├── config.yml                  # Agent configuration
-├── state.json                  # Runtime state
-├── client.crt                  # Agent mTLS certificate
-├── client.key                  # Agent private key (never leaves this machine)
-├── ca.crt                      # CertKeeper CA certificate
-├── scripts/                    # User-created post-deploy scripts (optional)
-│   └── deploy-nginx.sh
-└── deployments/
-    └── <id>/
-        ├── fullchain.pem       # Full certificate chain
-        ├── cert.pem            # Leaf certificate
-        └── privkey.pem         # Private key
-```
-
-## Building
-
-Requires Go 1.25+.
-
-```bash
-go build -o ceagent ./cmd/ceagent/
-```
-
-With version info:
-
-```bash
-go build -ldflags "-X main.version=1.0.0 -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o ceagent ./cmd/ceagent/
-```
-
-## How It Works
-
-1. **Enrollment** — The agent generates a local RSA 2048 key pair, sends a CSR to the server with the one-time token, and receives a signed agent certificate valid for 45 days.
-
-2. **Heartbeat loop** — The agent sends periodic heartbeats (server-controlled interval). The heartbeat response includes a `deployments_hash` — if it differs from the locally stored value, the agent fetches the full deployment list and syncs certificates.
-
-3. **Certificate deployment** — For each assigned deployment with a changed `content_hash`, the agent downloads the certificate bundle, validates the PEM content, and writes `fullchain.pem`, `cert.pem`, and `privkey.pem` to the deployment directory, then runs the post-deploy script if configured.
-
-4. **Agent cert renewal** — When the agent certificate has fewer than 15 days remaining (or the server requests it), the agent generates a new key pair and CSR, authenticates with the current cert, and atomically swaps to the new certificate.
-
-## Project Structure
-
-```
-certkeeper-agent/
-├── cmd/ceagent/          # CLI entry point and subcommands (enroll, run, status, renew-cert, deployments, deploy, version)
-├── docs/                 # Documentation (installation, uninstall, post-deploy scripts)
-├── internal/
-│   ├── agent/            # Core daemon loop (heartbeat, actions, cert renewal)
-│   ├── config/           # Config loading/saving (config.yml)
-│   ├── deployment/       # Certificate deployment, sync, post-deploy hooks
-│   ├── enrollment/       # One-time enrollment flow
-│   ├── mtls/             # mTLS client, key/CSR generation
-│   └── state/            # Runtime state persistence (state.json)
-└── packaging/
-    ├── linux/            # systemd unit, nfpm config, enrollment script
-    └── windows/          # WiX MSI installer, enrollment script
-```
+<br>
 
 ## Documentation
 
-- [Installation Guide](docs/installation.md) — interactive & silent install for all platforms
-- [Uninstall Guide](docs/uninstall.md) — standard removal, complete cleanup, and manual recovery
-- [Post-Deploy Script Examples](docs/post-deploy-scripts.md) — Nginx, Apache, IIS, HAProxy, Docker, and more
+| Document | Description |
+|----------|-------------|
+| [Installation Guide](docs/installation.md) | Interactive & silent install for all platforms |
+| [Uninstall Guide](docs/uninstall.md) | Standard removal, complete cleanup, and manual recovery |
+| [Post-Deploy Script Examples](docs/post-deploy-scripts.md) | Nginx, Apache, IIS, HAProxy, Docker, and more |
+
+<br>
 
 ## License
 
